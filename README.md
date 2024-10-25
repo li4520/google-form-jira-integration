@@ -22,8 +22,8 @@ This project automates the process of capturing Google Forms submissions and cre
    Clone the repository or create a Google Apps Script project and copy the contents of the script into the editor.
 
 2. **Update the Script Properties**  
-   Set up the following properties in Google Apps Script:
-   - **bearerToken:** The JIRA API bearer token.
+   Set up the following properties in Project Settings > Script Properities
+   - **bearerToken:** The JIRA API bearer token. 
    - **jiraDomain:** The domain URL of your JIRA instance.
    - **jiraProjectKey:** The JIRA project key where issues will be created.
    - **issueType:** The JIRA issue type to be created (e.g., Task, Bug).
