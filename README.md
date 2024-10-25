@@ -21,14 +21,8 @@ This project automates the process of capturing Google Forms submissions and cre
 1. **Clone the Repository**  
    Clone the repository or create a Google Apps Script project and copy the contents of the script into the editor.
 
-2. **Configure the Script Properties**  
+2. **Update the Script Properties**  
    Set up the following properties in Google Apps Script:
-
-   ```javascript
-   const SCRIPT_PROPERTIES = PropertiesService.getScriptProperties();
-   ```
-
-   The required properties are:
    - **bearerToken:** The JIRA API bearer token.
    - **jiraDomain:** The domain URL of your JIRA instance.
    - **jiraProjectKey:** The JIRA project key where issues will be created.
@@ -38,14 +32,17 @@ This project automates the process of capturing Google Forms submissions and cre
    - **spreadsheetId:** The ID of the linked Google Sheet where responses are captured.
    - **sheetName:** The name of the sheet within the Google Sheet where JIRA responses are logged.
 
-3. **Link the Google Form and Google Sheets**  
-   Ensure that your Google Form is linked to a Google Sheet to capture submissions.
+3. **Customize Jira Custom Field IDs**  
+   Update the custom field IDs in the script to match the custom field IDs in your JIRA instance.
 
-4. **Add Custom Field IDs**  
-   Update the custom field IDs in the script to match the custom field IDs in your JIRA instance. You can find these IDs in JIRA's field configuration.
+4. **Customize Form Fields**
+   To add or modify fields being captured from the form, update the logic inside the `onFormSubmit` function. The script uses the form field titles to map responses to variables. Ensure the form field titles match exactly as referenced in the script.
 
-5. **Deploy the Script as a Web App**  
-   In the Apps Script editor, go to `Deploy` > `Manage Deployments` > `New Deployment`. Deploy the script as a Web App and authorize the necessary permissions.
+5. **Customizing JIRA Payload**
+   If you need to add or remove fields in the JIRA issue payload, modify the `createJiraTicket` function accordingly. Ensure you have the correct custom field IDs and values as per your JIRA configuration.
+
+6. In the Apps Script editor, go to `Deploy` > `Manage Deployments` > `New Deployment`. Deploy the script as a Web App and authorize the necessary permissions.
+
 
 ## Usage
 
@@ -57,16 +54,6 @@ This project automates the process of capturing Google Forms submissions and cre
 
 3. **Logs and Captures Response**  
    The script logs JIRA responses and captures the JIRA issue key or error message in the linked Google Sheet for tracking purposes.
-
-## Configuration
-
-### Customizing Form Fields
-
-To add or modify fields being captured from the form, update the logic inside the `onFormSubmit` function. The script uses the form field titles to map responses to variables. Ensure the form field titles match exactly as referenced in the script.
-
-### Customizing JIRA Payload
-
-If you need to add or remove fields in the JIRA issue payload, modify the `createJiraTicket` function accordingly. Ensure you have the correct custom field IDs and values as per your JIRA configuration.
 
 
 
