@@ -1,59 +1,108 @@
+# Google Form to Jira Cloud Integration (Boilerplate)
 
-# Google Forms to JIRA Integration
+## Overview
+This script automates the creation of Jira Cloud issues based on Google Form submissions. It is designed as a robust starting point (boilerplate) that handles complex requirements out of the box, including:
 
-This project automates the process of capturing Google Forms submissions and creating corresponding tickets in JIRA. The script uses Google Apps Script to extract form responses, construct a JIRA API payload, and send the data to JIRA to create a new issue.
+* **Concurrency Handling:** Uses timestamp matching to ensure the correct spreadsheet row is updated, even if multiple forms are submitted simultaneously.
+* **Jira Cloud Formatting:** Automatically converts text to "Atlassian Document Format" (ADF), required for Jira Cloud Descriptions and Paragraph fields.
+* **Write-Back:** Writes the generated Jira Issue Key (e.g., `MKT-123`) back to the Google Sheet.
+* **Error Alerting:** Sends email alerts if the integration fails.
 
-## Features
-
-- **Form Integration:** Captures responses from a linked Google Form.
-- **JIRA Ticket Creation:** Automatically creates JIRA issues with the collected data.
-- **Cascading Fields Handling:** Dynamically constructs and populates JIRA custom fields, including select list cascading fields.
-- **Customizable:** Easily configurable to add more fields or modify existing logic.
-- **Logs and Captures JIRA API Responses:** Logs the JIRA issue key and captures responses in a linked Google Sheet.
+---
 
 ## Prerequisites
 
-- **Google Workspace:** Access to Google Forms and Google Sheets.
-- **JIRA Access:** JIRA account with API access and appropriate permissions to create issues.
+Before configuring the script, gather the following information:
 
-## Setup
+1.  **Jira URL:** (e.g., `https://yourcompany.atlassian.net`)
+2.  **Jira Email:** The email address used to log in to Jira.
+3.  **Jira API Token:**
+    * Go to [id.atlassian.com/manage/api-tokens](https://id.atlassian.com/manage/api-tokens).
+    * Click **Create API token**.
+    * Label it "GoogleFormIntegration" and copy the secret string.
+4.  **Project Key:** The prefix of your Jira project (e.g., `IT`, `MKT`, `OPS`).
+5.  **Reporter Account ID:**
+    * The "Reporter" cannot be set by email in newer Jira API versions. You need the **Atlassian Account ID** (a long alphanumeric string).
+    * *Tip:* Navigate to the user's profile in Jira and look at the URL: `/jira/people/[ACCOUNT_ID]`.
 
-1. **Clone the Repository**  
-   Clone the repository or create a Google Apps Script project and copy the contents of the script into the editor.
+---
 
-2. **Update the Script Properties**  
-   Set up the following properties in Project Settings > Script Properities
-   - **bearerToken:** The JIRA API bearer token. 
-   - **jiraDomain:** The domain URL of your JIRA instance.
-   - **jiraProjectKey:** The JIRA project key where issues will be created.
-   - **issueType:** The JIRA issue type to be created (e.g., Task, Bug).
-   - **formId:** The Google Form ID that will trigger this script.
-   - **jiraReporter:** The reporter name in JIRA (optional).
-   - **spreadsheetId:** The ID of the linked Google Sheet where responses are captured.
-   - **sheetName:** The name of the sheet within the Google Sheet where JIRA responses are logged.
+## Part 1: Mapping Guide (Pre-Work)
 
-3. **Customize Jira Custom Field IDs**  
-   Update the custom field IDs in the script to match the custom field IDs in your JIRA instance.
+Before touching the code, fill out this table to map your Google Form Questions to your Jira Custom Fields.
 
-4. **Customize Form Fields**
-   To add or modify fields being captured from the form, update the logic inside the `onFormSubmit` function. The script uses the form field titles to map responses to variables. Ensure the form field titles match exactly as referenced in the script.
+**How to find Jira Custom Field IDs:**
+1.  Go to **Jira Settings** (Gear Icon) > **Issues** > **Custom Fields**.
+2.  Find your field, click **...** (three dots) > **View/Edit**.
+3.  Look at the URL in your browser address bar. You will see `?id=10045`. The ID is `customfield_10045`.
 
-5. **Customizing JIRA Payload**
-   If you need to add or remove fields in the JIRA issue payload, modify the `createJiraTicket` function accordingly. Ensure you have the correct custom field IDs and values as per your JIRA configuration.
+| Google Form Question Title | Logic (If any) | Jira Field Name | Jira Field ID | Field Type |
+| :--- | :--- | :--- | :--- | :--- |
+| *e.g. Short Summary* | *Direct Map* | *Summary* | *System Field* | *Text* |
+| *e.g. Request Type* | *Array Map* | *Category* | *customfield_10021* | *Multi-Select* |
+| *e.g. Due Date* | *Format Date* | *Target End* | *customfield_10045* | *Date Picker* |
+| *e.g. Department* | *Direct Map* | *Dept* | *customfield_11000* | *Dropdown* |
+| | | | | |
 
-6. In the Apps Script editor, go to `Deploy` > `Manage Deployments` > `New Deployment`. Deploy the script as a Web App and authorize the necessary permissions.
+---
 
+## Part 2: Installation & Setup
 
-## Usage
+### 1. Set up the Google Sheet
+1.  Open the Google Sheet connected to your Form.
+2.  Go to **Extensions** > **Apps Script**.
+3.  Delete any code in `Code.gs` and paste the provided **Boilerplate Script**.
+4.  Create a column in your Spreadsheet (e.g., Column J) named **"Jira Key"**. Note the column number (A=1, B=2, ... J=10).
 
-1. **Form Submission**  
-   When a user submits the linked Google Form, the script is triggered automatically.
+### 2. Configure Environment Variables
+Instead of hardcoding passwords, we use Script Properties.
+1.  In the Apps Script editor, click **Project Settings** (Gear Icon on the left).
+2.  Scroll to **Script Properties**.
+3.  Click **Add script property** for each of the following:
 
-2. **JIRA Issue Creation**  
-   The script processes the form submission, extracts the relevant data, constructs a JIRA API payload, and creates a new issue in the configured JIRA project.
+| Property | Value Example |
+| :--- | :--- |
+| `jiraDomain` | `https://acme.atlassian.net` (No trailing slash) |
+| `jiraEmail` | `bot@acme.com` |
+| `jiraApiToken` | `ATATT3xFf...` (The token generated in Prerequisites) |
+| `jiraProjectKey` | `OPS` |
+| `jiraReporterId` | `557058:3f20a6...` |
+| `sheetName` | `Form Responses 1` |
+| `adminEmail` | `your.email@acme.com` (For error alerts) |
 
-3. **Logs and Captures Response**  
-   The script logs JIRA responses and captures the JIRA issue key or error message in the linked Google Sheet for tracking purposes.
+### 3. Update the Code
+1.  **Update Config:** At the top of the script, update `TIMESTAMP_COL` (usually 1) and `OUTPUT_COLUMN` (the column number where the Jira Key will be written).
+2.  **Update IDs:** In the `JIRA_FIELDS` object, replace the example IDs with the ones from your **Mapping Guide**.
+3.  **Update Logic:**
+    * Go to `parseFormResponses()`: Update the `switch (title)` cases to match your **Google Form Question Titles**.
+    * Go to `buildJiraPayload()`: Ensure the variables map correctly to the Jira Fields.
 
+### 4. Create the Trigger
+The script needs to run automatically when a form is submitted.
+1.  In Apps Script, click **Triggers** (Alarm clock icon on the left).
+2.  Click **+ Add Trigger**.
+3.  Configure:
+    * **Function to run:** `onFormSubmit`
+    * **Deployment:** `Head`
+    * **Event source:** `From spreadsheet`
+    * **Event type:** `On form submit`
+4.  Click **Save**. You will be asked to authorize permissions.
 
+---
 
+## Part 3: Troubleshooting
+
+| Issue | Likely Cause | Solution |
+| :--- | :--- | :--- |
+| **Script runs but no Jira ticket** | Invalid Auth or Payload | Check `View` > `Executions` logs. Look for "HTTP 400" or "HTTP 401". |
+| **HTTP 400 Error** | Bad Payload Format | Usually a Select/Dropdown field mismatch. Jira expects exact case-sensitive matches for options. |
+| **HTTP 401 Error** | Auth Failure | Check your Email and API Token in Script Properties. Ensure no extra spaces. |
+| **"Summary is missing"** | Form Title Mismatch | The `case "Question Title"` in the script must match the Google Form question exactly (including spaces). |
+| **Jira Key written to wrong row** | Timestamp Mismatch | Ensure the Sheet is sorted by timestamp or that the `findRowByTimestamp` lookback limit is high enough. |
+
+---
+
+## Developer Notes
+
+* **ADF Conversion:** Jira Cloud deprecated "Wiki Markup" for descriptions. The `toADF()` function in this script converts plain text into the required JSON block format.
+* **Permissions:** The script runs as the user who set up the trigger. Ensure that user has "Create Issue" permissions in the target Jira project.
