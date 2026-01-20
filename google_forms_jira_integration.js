@@ -1,179 +1,301 @@
-// Placeholders
+/**
+ * Google Form to Jira Integration (Boilerplate)
+ * * CORE FEATURES:
+ * 1. Creates Jira Issues from Google Form submissions.
+ * 2. Handles Jira Cloud "Atlassian Document Format" (ADF) automatically.
+ * 3. Writes the Jira Issue Key back to the Google Sheet.
+ * 4. Uses Timestamp lookup to ensure race-conditions don't write to the wrong row.
+ * * SETUP INSTRUCTIONS:
+ * 1. Attach this script to the Google Sheet linked to your Form.
+ * 2. Set up the following in File > Project Settings > Script Properties:
+ * - jiraDomain (e.g., https://yourcompany.atlassian.net)
+ * - jiraEmail (The email you use to log into Jira)
+ * - jiraApiToken (Generate at id.atlassian.com)
+ * - jiraProjectKey (e.g., MKT, IT, OPS)
+ * - jiraReporterId (The Atlassian Account ID of the "reporter" bot user)
+ * - sheetName (The specific tab name, e.g., "Form Responses 1")
+ * * 3. Create a Trigger: Edit > Current Project's Triggers > Add Trigger > onFormSubmit > From form.
+ */
+
+// ==========================================
+// 1. CONFIGURATION & CONSTANTS
+// ==========================================
+
 const SCRIPT_PROPERTIES = PropertiesService.getScriptProperties();
-const BEARER_TOKEN = SCRIPT_PROPERTIES.getProperty("jiraBearerToken"); // Get JIRA bear token
-const JIRA_DOMAIN = SCRIPT_PROPERTIES.getProperty("jiraDomain"); // JIRA domain
-const PROJECT_KEY = SCRIPT_PROPERTIES.getProperty("jiraProjectKey"); // JIRA project key
-const ISSUE_TYPE = SCRIPT_PROPERTIES.getProperty("issueType"); // JIRA issue type
-const FORM_ID = SCRIPT_PROPERTIES.getProperty("formId"); // Google Form ID
-const REPORTER = SCRIPT_PROPERTIES.getProperty("jiraReporter"); // JIRA reporter username
-const SPREADSHEET_ID = SCRIPT_PROPERTIES.getProperty("spreadsheetId"); // Google Spreadsheet ID
-const SHEET_NAME = SCRIPT_PROPERTIES.getProperty("sheetName"); // Google Spreadsheet's sheet name to capture JIRA response
 
+// Jira Auth & Environment
+const JIRA_DOMAIN      = SCRIPT_PROPERTIES.getProperty("jiraDomain");
+const JIRA_EMAIL       = SCRIPT_PROPERTIES.getProperty("jiraEmail"); 
+const JIRA_API_TOKEN   = SCRIPT_PROPERTIES.getProperty("jiraApiToken");
+const PROJECT_KEY      = SCRIPT_PROPERTIES.getProperty("jiraProjectKey");
+const REPORTER_ID      = SCRIPT_PROPERTIES.getProperty("jiraReporterId"); 
+const ISSUE_TYPE       = "Task"; // Change to "Story", "Bug", or "Epic" as needed
 
-// Jira Custom Field IDs
-const JIRA_CUSTOM_FIELDS = {
-    epic: "customfield_10001",
-    email: "customfield_10002",
-    preferredContactName: "customfield_10003",
-    brandCategory: "customfield_10004", // select list (cascading) in Jira - need to populate category + brand
-    campaignName: "customfield_10005",
-    requestDescription: "customfield_10006",
-    // Additional custom fields here
+// Spreadsheet Config
+const SHEET_NAME        = SCRIPT_PROPERTIES.getProperty("sheetName") || "Form Responses 1";
+const TIMESTAMP_COL     = 1;  // Usually Column A
+const JIRA_KEY_COL      = 1;  // Where to write the Jira Key? (1 = Column A, overwrites timestamp? Better to use a new column index)
+// NOTE: It is recommended to create a dedicated column for "Jira Key" in your sheet (e.g., Col 10) and update this number.
+
+// Jira Custom Field IDs (Map your specific Jira fields here)
+// Find these by visiting: [Jira URL]/rest/api/3/field
+const JIRA_FIELDS = {
+    department: "customfield_10001", // Example: Single Select
+    requestType: "customfield_10002", // Example: Dropdown
+    dueDate: "customfield_10003",     // Example: Date Picker
+    budgetCode: "customfield_10004"   // Example: Text Field
 };
 
-// Function to handle form submission
-function onFormSubmit(e) {
+// ==========================================
+// 2. MAIN TRIGGER
+// ==========================================
 
-    if (!e) {
-        Logger.log("No event object received");
-        return;
-    }
+function onFormSubmit(e) {
+    if (!e) { Logger.log("No event object. Run via Trigger."); return; }
 
     var formResponse = e.response;
-    Logger.log("FormResponse received");
-
-    // Get respondent's email address
+    var submissionTs = formResponse.getTimestamp(); 
     var respondentEmail = formResponse.getRespondentEmail();
-    Logger.log("Respondent's email: " + respondentEmail);
 
-    // Get all item responses
-    var itemResponses = formResponse.getItemResponses();
-    var preferredContactName = "";
-    var brandCategory = "";
-    var campaignName = "";
-    var requestDescription = "";
-    // Additional variables to capture here
+    Logger.log("New Submission: " + respondentEmail + " at " + submissionTs);
 
-    // Extract responses
-    for (var i = 0; i < itemResponses.length; i++) {
-        var itemResponse = itemResponses[i];
-        var title = itemResponse.getItem().getTitle();
-        var response = itemResponse.getResponse();
-        Logger.log("Response for item " + title + ": " + response);
+    // --- 2a. Parse Form Data ---
+    var formData = parseFormResponses(formResponse);
 
-        if (title === "Preferred Contact Name") {
-            preferredContactName = response;
-        }
-        else if (title === "Brand Category") {
-            brandCategory = response;
-        }
-        else if (["Home Care Brand", "Oral Care Brand", "Personal Care Brand", "Pet Nutrition Brand", "Skin Health Brand"].includes(title)) {
-            brand = response;
-        }
-        else if (title === "Campaign Name") {
-            campaignName = response;
-        }
-        else if (title === "Description of Request") {
-            requestDescription = response;
-        }
-        // Additional responses to capture here
+    // --- 2b. Locate Sheet Row (For Write-back) ---
+    var targetRow = null;
+    try {
+        var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+        targetRow = findRowByTimestamp(sheet, submissionTs, TIMESTAMP_COL);
+    } catch (err) {
+        Logger.log("⚠ Row lookup failed: " + err);
+        // We continue anyway to ensure the ticket is created even if write-back fails
     }
 
-    // Create the jiraEpic and jiraSummary variables
-    var jiraEpic = `${brandCategory} | ${campaignName}`;
-    var jiraSummary = jiraEpic; // Same value as jiraEpic for now
-
-    // Check all required values for Jira - Epic and Summary
-    if (jiraEpic && jiraSummary) {
-
-        createJiraTicket({
-            jiraEpic,
-            jiraSummary,
-            respondentEmail,
-            preferredContactName,
-            brandCategory,
-            campaignName,
-            requestDescription,
-            // Additional variables to capture here
-        });
-    
+    // --- 2c. Create Jira Ticket ---
+    if (formData.summary) {
+        createJiraTicket(formData, respondentEmail, targetRow);
     } else {
-        Logger.log("jiraEpic or jiraSummary not found");
+        Logger.log("❌ Error: Summary missing. Ticket not created.");
     }
 }
 
+// ==========================================
+// 3. DATA MAPPING (CUSTOMIZE THIS)
+// ==========================================
 
-function createJiraTicket(data) {
-
-    // Construct the divisionHub field dynamically based on whether localMarket is populated
-    var divisionHubField = {
-        value: data.divisionHub
+function parseFormResponses(formResponse) {
+    var itemResponses = formResponse.getItemResponses();
+    
+    // Initialize data object
+    var data = {
+        summary: "",
+        description: "",
+        department: null,
+        requestType: [],
+        dueDate: null,
+        budgetCode: ""
     };
 
-    // Add child value to the field if localMarket is populated, otherwise set child to null. JSON structure for jira cascading field is weird like this.
-    if (data.localMarket) {
-        divisionHubField.child = {
-            value: data.localMarket
-        };
-    } else {
-        divisionHubField.child = null;
-    }
-    
-    // Jira JSON payload
-    var payload = {
-        fields: {
-            project: {
-                key: PROJECT_KEY,
-            },
-            [JIRA_CUSTOM_FIELDS.epic]: data.jiraEpic,
-            summary: data.jiraSummary,
-            issuetype: {
-                name: ISSUE_TYPE,
-            },
-            description: data.requestDescription,
-            [JIRA_CUSTOM_FIELDS.preferredContactName]: data.preferredContactName,
-            [JIRA_CUSTOM_FIELDS.brandCategory]: {
-                value: data.brandCategory,
-                child: {
-                    value: data.brand
-                }
-            },
-            [JIRA_CUSTOM_FIELDS.campaignName]: data.campaignName,
-            // Additional fields to capture here
+    // Loop through form questions
+    for (var i = 0; i < itemResponses.length; i++) {
+        var item = itemResponses[i];
+        var title = item.getItem().getTitle(); // The exact Question Title on Google Form
+        var response = item.getResponse();
 
+        // >>> MAP YOUR QUESTIONS HERE <<<
+        switch (title) {
+            case "Short Request Summary":
+                data.summary = response;
+                break;
+
+            case "Detailed Description":
+                data.description = response;
+                break;
+
+            case "Which Department is this for?": 
+                // Handling Single Selects
+                data.department = response; 
+                break;
+
+            case "Request Type":
+                // Handling Multi-Select (Checkboxes)
+                // Ensure it's always an array for the payload builder
+                data.requestType = Array.isArray(response) ? response : [response];
+                break;
+
+            case "Desired Due Date":
+                // Ensure date format YYYY-MM-DD
+                data.dueDate = response; 
+                break;
+                
+            case "Budget Code":
+                data.budgetCode = response;
+                break;
+                
+            // Add more cases here matching your Form Question Titles
+        }
+    }
+
+    // Fallback: If no summary provided, generate one
+    if (!data.summary) {
+        data.summary = "New Request from " + formResponse.getRespondentEmail();
+    }
+
+    return data;
+}
+
+// ==========================================
+// 4. PAYLOAD BUILDER
+// ==========================================
+
+function buildJiraPayload(data, respondentEmail) {
+    
+    var payloadObj = {
+        fields: {
+            project: { key: PROJECT_KEY },
+            issuetype: { name: ISSUE_TYPE },
+            summary: data.summary,
+            description: toADF(data.description), // Converts text to Jira Cloud Format
+            reporter: { accountId: REPORTER_ID }, // The API user/bot
+            
+            // Standard Jira Field: Labels (Optional)
+            labels: ["google-form-generated"],
+
+            // --- Custom Fields Mapping ---
+            
+            // Example 1: Text Field
+            [JIRA_FIELDS.budgetCode]: data.budgetCode,
+
+            // Example 2: Date Field
+            [JIRA_FIELDS.dueDate]: data.dueDate,
+
+            // Example 3: Single Select Dropdown
+            // Note: Use { value: "Option" } or { id: "100" }
+            [JIRA_FIELDS.department]: data.department ? { value: data.department } : null,
+
+            // Example 4: Multi-Select Checkboxes
+            // Must map array of strings to array of objects: [{value: "A"}, {value: "B"}]
+            [JIRA_FIELDS.requestType]: data.requestType.map(function(val) { 
+                return { value: val }; 
+            })
         }
     };
 
-    Logger.log("Payload: " + JSON.stringify(payload, null, 2)); // Pretty print the payload
+    // Clean up undefined fields to prevent API errors
+    // (Optional utility to remove keys with null values if your Jira setup is strict)
+    
+    return payloadObj;
+}
 
+// ==========================================
+// 5. API INTERACTION
+// ==========================================
+
+function createJiraTicket(data, respondentEmail, targetRow) {
+    var payload = buildJiraPayload(data, respondentEmail);
+    var payloadString = JSON.stringify(payload);
+
+    Logger.log("Sending Payload: " + payloadString);
+
+    var url = JIRA_DOMAIN + "/rest/api/3/issue";
     var options = {
         method: "post",
         contentType: "application/json",
         headers: {
-            Authorization: "Bearer " + BEARER_TOKEN,
+            "Authorization": "Basic " + Utilities.base64Encode(JIRA_EMAIL + ":" + JIRA_API_TOKEN),
+            "Accept": "application/json"
         },
-        payload: JSON.stringify(payload),
+        payload: payloadString,
+        muteHttpExceptions: true
     };
-
-    var url = JIRA_DOMAIN + "/rest/api/2/issue";
 
     try {
         var response = UrlFetchApp.fetch(url, options);
-        Logger.log("Response: " + response.getContentText());
-        
-        // Parse the response to get the JIRA issue key
-        var jiraIssueKey = JSON.parse(response.getContentText()).key;
-        
-        // Capture the JIRA issue key in the Google Sheet
-        captureJiraResponse(jiraIssueKey);
+        var responseCode = response.getResponseCode();
+        var responseBody = response.getContentText();
 
-    } catch (error) {
-        Logger.log("Error: " + error.toString());
-
-        // Capture the JIRA error in the Google Sheet
-        captureJiraResponse("Error: " + error.toString());
+        if (responseCode >= 200 && responseCode < 300) {
+            var responseJson = JSON.parse(responseBody);
+            var issueKey = responseJson.key;
+            Logger.log("✅ Created: " + issueKey);
+            
+            // Write back to sheet
+            if (targetRow) {
+                writeToSheet(targetRow, issueKey);
+            }
+        } else {
+            Logger.log("❌ Jira Error (" + responseCode + "): " + responseBody);
+            if (targetRow) writeToSheet(targetRow, "Error: " + responseCode);
+            sendErrorEmail("Jira API Error", responseBody, payloadString);
+        }
+    } catch (e) {
+        Logger.log("❌ System Error: " + e.toString());
+        sendErrorEmail("Script Runtime Error", e.toString(), payloadString);
     }
 }
 
-// Capture the JIRA response in the Google Sheet
-function captureJiraResponse(jiraResponse) {
+// ==========================================
+// 6. HELPER FUNCTIONS
+// ==========================================
 
-    var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-    var sheet = spreadsheet.getSheetByName(SHEET_NAME); 
+// Write Jira Key back to the sheet
+function writeToSheet(row, value) {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+    // Assuming you want to write this to a specific column. 
+    // If you used the original script's logic, it overwrote Column 1. 
+    // It is safer to use a dedicated column, e.g., Column 10 (J).
+    var OUTPUT_COLUMN = 10; 
+    sheet.getRange(row, OUTPUT_COLUMN).setValue(value);
+}
 
-    // Get the row to the last form submission
-    var formRow = sheet.getLastRow(); // Gets the last row, which should correspond to the new submission
+// Convert plain text to Atlassian Document Format (ADF) - REQUIRED for Jira Cloud
+function toADF(text) {
+    if (!text) return undefined;
+    var safeText = String(text);
+    var paragraphs = safeText.split(/\r?\n/).map(function(line) {
+        return {
+            type: "paragraph",
+            content: line.trim() ? [{ type: "text", text: line }] : []
+        };
+    });
+    return { type: "doc", version: 1, content: paragraphs };
+}
 
-    // Record the JIRA response in the last row and first column
-    sheet.getRange(formRow, 1).setValue(jiraResponse);
+// Scans sheet from bottom up to find the exact submission row based on timestamp
+function findRowByTimestamp(sheet, ts, colIndex) {
+    if (!(ts instanceof Date)) throw new Error("Invalid Timestamp");
+    
+    var lastRow = sheet.getLastRow();
+    var lookback = 20; // Only check last 20 rows for performance
+    var startRow = Math.max(1, lastRow - lookback);
+    var numRows = lastRow - startRow + 1;
+    
+    if (numRows < 1) return null;
+
+    var values = sheet.getRange(startRow, colIndex, numRows, 1).getValues();
+    var targetTime = ts.getTime();
+
+    // Loop backwards
+    for (var i = values.length - 1; i >= 0; i--) {
+        var cellDate = values[i][0];
+        if (cellDate instanceof Date && Math.abs(cellDate.getTime() - targetTime) < 1000) {
+            // allowing 1 second variance just in case, usually exact match works
+            return startRow + i; 
+        }
+    }
+    throw new Error("Row not found for timestamp: " + ts);
+}
+
+// Simple Error Alert
+function sendErrorEmail(subject, errorDetails, payload) {
+    // You can hardcode an email here or use a Script Property
+    var adminEmail = SCRIPT_PROPERTIES.getProperty("adminEmail"); 
+    if (adminEmail) {
+        MailApp.sendEmail({
+            to: adminEmail,
+            subject: "Alert: Jira Integration Failed - " + subject,
+            body: "Error Details:\n" + errorDetails + "\n\nPayload Attempted:\n" + payload
+        });
+    }
 }
